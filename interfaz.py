@@ -4,7 +4,8 @@ from datetime import datetime
 import os
 import re
 from keywords import PALABRAS_RESERVADAS
-from analizador_lexico import analizar_codigo, tabla_simbolos
+from analizador_lexico import analizar_codigo, tabla_simbolos, limpiar_errores
+
 
 class PyEsp:
     def __init__(self, root):
@@ -24,6 +25,12 @@ class PyEsp:
 
         self.archivo_actual = None
         self.contenido_modificado = False
+
+        # AGREGADO: Variables para control de ejecución y debouncing
+        self.ejecutando = False
+        self.highlight_timer = None
+        self.analisis_timer = None
+        self.ultimo_analisis = None
 
         self.create_layout()
 
@@ -50,11 +57,23 @@ class PyEsp:
                              bg=self.bg_dark, fg="#cccccc")
         separator.pack(side=tk.LEFT)
 
-        ejecutar_btn = tk.Button(header, text="▶ Ejecutar", font=tab_font,
-                                 bg=self.accent_blue, fg="white",
-                                 padx=15, pady=8, relief=tk.FLAT, cursor="hand2",
-                                 command=self.ejecutar_compilacion)
-        ejecutar_btn.pack(side=tk.RIGHT, padx=10, pady=12)
+        #  NUEVO: Botón de Pruebas
+        pruebas_btn = tk.Button(header, text="🧪 Pruebas", font=tab_font,
+                                bg="#28a745", fg="white",
+                                relief=tk.FLAT, cursor="hand2",
+                                command=self.mostrar_menu_pruebas)
+        pruebas_btn.pack(side=tk.LEFT, padx=10, pady=12)
+
+        separator2 = tk.Label(header, text="|", font=tab_font,
+                              bg=self.bg_dark, fg="#cccccc")
+        separator2.pack(side=tk.LEFT)
+
+        #  CORREGIDO: Cambiar a self.ejecutar_btn
+        self.ejecutar_btn = tk.Button(header, text="▶ Ejecutar", font=tab_font,
+                                      bg=self.accent_blue, fg="white",
+                                      padx=15, pady=8, relief=tk.FLAT, cursor="hand2",
+                                      command=self.ejecutar_compilacion)
+        self.ejecutar_btn.pack(side=tk.RIGHT, padx=10, pady=12)
 
         settings_btn = tk.Button(header, text="⚙", font=("Segoe UI", 14),
                                  bg=self.bg_dark, fg=self.text_color,
@@ -77,8 +96,8 @@ class PyEsp:
         self.breadcrumb_text.pack(side=tk.LEFT, padx=20, pady=10)
 
         main_container = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
-                                         sashrelief=tk.RAISED, sashwidth=8,
-                                         bg=self.bg_light)
+                                        sashrelief=tk.RAISED, sashwidth=8,
+                                        bg=self.bg_light)
         main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
         code_panel = tk.Frame(main_container, bg=self.bg_dark)
@@ -101,8 +120,13 @@ class PyEsp:
                                                      relief=tk.FLAT, padx=10, pady=5)
         self.code_editor.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.code_editor.tag_config("palabra_reservada", foreground=self.palabra_reservada_color,
-                                    font=("Consolas", 11, "bold"))
+        #  MEJORADO: Tag con fondo azul visible y texto blanco
+        self.code_editor.tag_config("palabra_reservada",
+                                    foreground="#ffffff",
+                                    background="#0052cc",
+                                    font=("Consolas", 11, "bold"),
+                                    relief="solid",
+                                    borderwidth=0)
         self.code_editor.tag_config("normal", foreground=self.text_color)
 
         ejemplo_codigo = """
@@ -121,7 +145,7 @@ imprimir_lista(numeros)
         self.code_editor.bind("<MouseWheel>", self.on_mouse_wheel)
         self.code_editor.bind("<Button-4>", self.on_mouse_wheel)
         self.code_editor.bind("<Button-5>", self.on_mouse_wheel)
-        self.code_editor.bind("<Configure>", self.sincronizar_scroll)
+        self.code_editor.bind("<Configure>", self.on_editor_configure)
 
         result_panel = tk.Frame(main_container, bg=self.bg_light, width=520)
         result_panel.pack_propagate(False)
@@ -146,7 +170,7 @@ imprimir_lista(numeros)
         token_frame.pack(fill=tk.BOTH, expand=True)
 
         self.tokens_table = ttk.Treeview(token_frame, columns=("token", "lexema", "tipo", "linea", "columna", "id"),
-                                        show="headings", style="Custom.Treeview")
+                                         show="headings", style="Custom.Treeview")
         self.tokens_table.heading("token", text="Token")
         self.tokens_table.heading("lexema", text="Lexema")
         self.tokens_table.heading("tipo", text="Tipo")
@@ -229,8 +253,12 @@ imprimir_lista(numeros)
         self.console_output.tag_config("error", foreground="#ff4444")
         self.console_output.tag_config("warning", foreground="#ffff00")
 
-        self.add_console_log(f"[{self.obtener_hora()}] INFO Palabras reservadas cargadas: {len(self.palabras_reservadas)}", "info")
+        self.add_console_log(
+            f"[{self.obtener_hora()}] INFO Palabras reservadas cargadas: {len(self.palabras_reservadas)}", "info")
         self.add_console_log(f"[{self.obtener_hora()}] INFO PyEsp listo para usar", "success")
+
+        #  NUEVO: Ejecutar análisis inicial
+        self.ejecutar_analisis_tiempo_real()
 
     def mostrar_menu_archivo(self):
         menu = tk.Menu(self.root, tearoff=0)
@@ -240,6 +268,52 @@ imprimir_lista(numeros)
         menu.add_command(label="Guardar", command=self.guardar_archivo)
         menu.add_command(label="Guardar como...", command=self.guardar_como)
         menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
+
+    #  NUEVO: Método para mostrar menú de pruebas
+    def mostrar_menu_pruebas(self):
+        try:
+            from test_suite import PRUEBAS_ERRORES
+
+            menu = tk.Menu(self.root, tearoff=0)
+
+            for nombre_test in PRUEBAS_ERRORES.keys():
+                menu.add_command(
+                    label=nombre_test,
+                    command=lambda t=nombre_test: self.cargar_test(t)
+                )
+
+            menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        except ImportError:
+            messagebox.showerror("Error", "No se encontró el archivo test_suite.py")
+
+    #  NUEVO: Método para cargar una prueba
+    def cargar_test(self, nombre_test):
+        try:
+            from test_suite import PRUEBAS_ERRORES, DESCRIPCIONES
+
+            codigo_test = PRUEBAS_ERRORES.get(nombre_test, "")
+            descripcion = DESCRIPCIONES.get(nombre_test, [])
+
+            # Limpiar y cargar código
+            self.code_editor.config(state=tk.NORMAL)
+            self.code_editor.delete(1.0, tk.END)
+            self.code_editor.insert(1.0, codigo_test)
+
+            # Limpiar consola y mostrar descripción
+            self.limpiar_consola()
+            self.add_console_log(f"═══ {nombre_test} ═══", "info")
+            self.add_console_log("Errores esperados:", "warning")
+            for desc in descripcion:
+                self.add_console_log(desc, "warning")
+            self.add_console_log("", "info")
+
+            # Ejecutar análisis automático
+            self.ejecutar_analisis_tiempo_real()
+            self.update_line_numbers()
+            self.aplicar_syntax_highlighting()
+
+        except ImportError:
+            messagebox.showerror("Error", "No se encontró el archivo test_suite.py")
 
     def abrir_archivo(self):
         archivo = filedialog.askopenfilename(
@@ -271,6 +345,9 @@ imprimir_lista(numeros)
 
                 self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Archivo '{nombre_archivo}' abierto", "success")
 
+                #  NUEVO: Ejecutar análisis al cargar archivo
+                self.ejecutar_analisis_tiempo_real()
+
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo abrir el archivo:\n{str(e)}")
 
@@ -282,6 +359,9 @@ imprimir_lista(numeros)
         self.breadcrumb_text.config(text="📄 Sin archivo abierto  •  Proyecto / src")
         self.root.title("PyEsp - Sin guardar")
         self.add_console_log(f"[{self.obtener_hora()}] INFO Nuevo archivo creado", "info")
+        #  NUEVO: Limpiar análisis anterior
+        self.limpiar_consola()
+        self.ejecutar_analisis_tiempo_real()
 
     def guardar_archivo(self):
         if self.archivo_actual:
@@ -321,7 +401,8 @@ imprimir_lista(numeros)
                 self.breadcrumb_text.config(text=f"📄 {nombre_archivo}  •  Proyecto / src")
                 self.root.title(f"PyEsp - {nombre_archivo}")
                 self.contenido_modificado = False
-                self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Archivo guardado como '{nombre_archivo}'", "success")
+                self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Archivo guardado como '{nombre_archivo}'",
+                                     "success")
                 messagebox.showinfo("Éxito", "Archivo guardado correctamente")
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo guardar el archivo:\n{str(e)}")
@@ -335,10 +416,24 @@ imprimir_lista(numeros)
         self.line_numbers.insert("1.0", line_numbers_text)
         self.line_numbers.config(state=tk.DISABLED)
 
+    #  MEJORADO: Sincronización de scroll mejorada
     def on_code_change(self, event=None):
         self.update_line_numbers()
-        self.aplicar_syntax_highlighting()
+
+        # Cancelar el timer anterior si existe
+        if self.highlight_timer:
+            self.root.after_cancel(self.highlight_timer)
+
+        # Crear nuevo timer con delay de 150ms
+        self.highlight_timer = self.root.after(150, self.aplicar_syntax_highlighting)
+
+        #  NUEVO: Cancelar análisis anterior y crear uno nuevo con debouncing
+        if self.analisis_timer:
+            self.root.after_cancel(self.analisis_timer)
+        self.analisis_timer = self.root.after(300, self.ejecutar_analisis_tiempo_real)
+
         self.contenido_modificado = True
+        self.sincronizar_scroll()
 
     def aplicar_syntax_highlighting(self):
         self.code_editor.tag_remove("palabra_reservada", "1.0", tk.END)
@@ -355,9 +450,56 @@ imprimir_lista(numeros)
 
             self.code_editor.tag_add("palabra_reservada", indice_inicio, indice_fin)
 
+    #  NUEVO: Método para ejecutar análisis léxico en tiempo real
+    def ejecutar_analisis_tiempo_real(self):
+        contenido = self.code_editor.get(1.0, tk.END)
+
+        # No hacer análisis si no hay contenido
+        if not contenido.strip():
+            self.limpiar_tablas()
+            return
+
+        try:
+            # Ejecutar análisis léxico
+            resultado = analizar_codigo(contenido)
+            tokens = resultado["tokens"]
+            errores = resultado["errores"]
+
+            # Actualizar tablas automáticamente
+            self.actualizar_tablas(tokens, tabla_simbolos)
+
+            # Mostrar información en consola sin limpiarla cada vez
+            if errores:
+                # Solo mostrar errores, no limpiar consola
+                for idx, error in enumerate(errores, 1):
+                    linea_texto = f"L{error['linea']}, C{error['posicion']}" if error.get(
+                        'linea') else f"C{error['posicion']}"
+                    self.add_console_log(
+                        f"[{self.obtener_hora()}] ERROR #{idx}: {error['categoria']} - '{error['caracter']}' en {linea_texto}: {error['descripcion']}",
+                        "error"
+                    )
+
+        except Exception as e:
+            pass
+
+    #  NUEVO: Método para limpiar tablas
+    def limpiar_tablas(self):
+        for item in self.tokens_table.get_children():
+            self.tokens_table.delete(item)
+        for item in self.symbols_table.get_children():
+            self.symbols_table.delete(item)
+
+    #  MEJORADO: Sincronización de scroll
     def sincronizar_scroll(self, event=None):
-        primera_linea = self.code_editor.index("@0,0")
-        self.line_numbers.see(primera_linea)
+        try:
+            first_line = int(self.code_editor.index("@0,0").split(".")[0])
+            self.line_numbers.see(f"{first_line}.0")
+        except:
+            pass
+
+    #  NUEVO: Manejador de eventos de configuración
+    def on_editor_configure(self, event=None):
+        self.sincronizar_scroll()
 
     def on_mouse_wheel(self, event):
         self.sincronizar_scroll()
@@ -409,31 +551,48 @@ imprimir_lista(numeros)
                 s['id']
             ))
 
+    # MEJORADO: Protección contra ejecuciones múltiples
     def ejecutar_compilacion(self):
+        # Verificar si ya hay una ejecución en progreso
+        if self.ejecutando:
+            self.add_console_log(f"[{self.obtener_hora()}] WARNING Ejecución en progreso, espera a que termine...",
+                                 "warning")
+            return
+
         contenido = self.code_editor.get(1.0, tk.END)
 
         if not contenido.strip():
             self.add_console_log(f"[{self.obtener_hora()}] WARNING No hay código para compilar", "warning")
             return
 
-        self.limpiar_consola()
+        try:
+            # Marcar como ejecutando y deshabilitar botón
+            self.ejecutando = True
+            self.ejecutar_btn.config(state=tk.DISABLED)
 
-        resultado = analizar_codigo(contenido)
+            self.limpiar_consola()
 
-        tokens = resultado["tokens"]
-        errores = resultado["errores"]
+            resultado = analizar_codigo(contenido)
 
-        self.actualizar_tablas(tokens, tabla_simbolos)
+            tokens = resultado["tokens"]
+            errores = resultado["errores"]
 
-        self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Análisis léxico completado", "success")
+            self.actualizar_tablas(tokens, tabla_simbolos)
 
-        if errores:
-            for idx, error in enumerate(errores, 1):
-                linea_texto = f"L{error['linea']}, C{error['posicion']}" if error.get('linea') else f"C{error['posicion']}"
-                self.add_console_log(
-                    f"[{self.obtener_hora()}] ERROR #{idx}: {error['categoria']} - '{error['caracter']}' en {linea_texto}: {error['descripcion']}",
-                    "error"
-                )
+            self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Análisis léxico completado", "success")
+
+            if errores:
+                for idx, error in enumerate(errores, 1):
+                    linea_texto = f"L{error['linea']}, C{error['posicion']}" if error.get(
+                        'linea') else f"C{error['posicion']}"
+                    self.add_console_log(
+                        f"[{self.obtener_hora()}] ERROR #{idx}: {error['categoria']} - '{error['caracter']}' en {linea_texto}: {error['descripcion']}",
+                        "error"
+                    )
+        finally:
+            # Siempre restaurar el estado
+            self.ejecutando = False
+            self.ejecutar_btn.config(state=tk.NORMAL)
 
     def obtener_hora(self):
         return datetime.now().strftime("%H:%M:%S")

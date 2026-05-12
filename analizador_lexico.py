@@ -847,9 +847,10 @@ def consumir_con_afd(codigo, i, config):
 
 
 def analizar_codigo(codigo_fuente):
-    global errores, tabla_simbolos
+    global errores, tabla_simbolos, _id_simbolo
     limpiar_errores()
     tabla_simbolos.clear()
+    _id_simbolo = 1
 
     tokens = []
     i = 0

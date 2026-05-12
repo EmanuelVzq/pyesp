@@ -1,10 +1,10 @@
-# pyesp_gui.py
 import tkinter as tk
 from tkinter import ttk, scrolledtext, font, filedialog, messagebox
 from datetime import datetime
 import os
 import re
 from keywords import PALABRAS_RESERVADAS
+from analizador_lexico import analizar_codigo, tabla_simbolos
 
 class PyEsp:
     def __init__(self, root):
@@ -76,14 +76,16 @@ class PyEsp:
                                         fg="#666666")
         self.breadcrumb_text.pack(side=tk.LEFT, padx=20, pady=10)
 
-        main_container = tk.Frame(self.root, bg=self.bg_light)
+        main_container = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                                         sashrelief=tk.RAISED, sashwidth=8,
+                                         bg=self.bg_light)
         main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
         code_panel = tk.Frame(main_container, bg=self.bg_dark)
-        code_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_container.add(code_panel)
 
         code_frame = tk.Frame(code_panel, bg=self.bg_dark)
-        code_frame.pack(fill=tk.BOTH, expand=True)
+        code_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.line_numbers = tk.Text(code_frame, width=3, padx=8, pady=5,
                                     bg="#f6f8fa", fg="#666666",
@@ -103,34 +105,15 @@ class PyEsp:
                                     font=("Consolas", 11, "bold"))
         self.code_editor.tag_config("normal", foreground=self.text_color)
 
-        ejemplo_codigo = """funcion inicializarSistema() {
-  variable config = {
-    version: "1.0.4",
-    motor: "PyEsp-VS",
-    optimizaciones: verdadero
-  }
+        ejemplo_codigo = """
+# Ejemplo 
+funcion imprimir_lista(lista):
+    para elemento en lista:
+        imprimir(elemento)
 
-  intentar {
-    retorna proceso(config)
-  } excepto (error) {
-    lanzar error
-  }
-}
-
-si condicion {
-  mientras verdadero {
-    para elemento en lista {
-      continuar
-    }
-  }
-}
-
-importar desde modulo como alias
-clase MiClase hereda OtraClase {
-  funcion metodo() {
-    nulo
-  }
-}"""
+variable numeros = [1, 2, 3, 4]
+imprimir_lista(numeros)
+"""
 
         self.code_editor.insert(1.0, ejemplo_codigo)
         self.update_line_numbers()
@@ -139,6 +122,71 @@ clase MiClase hereda OtraClase {
         self.code_editor.bind("<Button-4>", self.on_mouse_wheel)
         self.code_editor.bind("<Button-5>", self.on_mouse_wheel)
         self.code_editor.bind("<Configure>", self.sincronizar_scroll)
+
+        result_panel = tk.Frame(main_container, bg=self.bg_light, width=520)
+        result_panel.pack_propagate(False)
+        main_container.add(result_panel, minsize=320)
+
+        notebook = ttk.Notebook(result_panel)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        token_tab = tk.Frame(notebook, bg=self.bg_light)
+        symbol_tab = tk.Frame(notebook, bg=self.bg_light)
+        notebook.add(token_tab, text="Tabla de Tokens")
+        notebook.add(symbol_tab, text="Tabla de Símbolos")
+
+        style = ttk.Style()
+        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff",
+                        foreground="#333333", font=("Consolas", 10))
+        style.configure("Custom.Treeview.Heading", font=("Segoe UI", 10, "bold"), background="#f0f0f0",
+                        foreground="#333333")
+        style.map("Custom.Treeview", background=[("selected", "#cce5ff")], foreground=[("selected", "#000000")])
+
+        token_frame = tk.Frame(token_tab, bg=self.bg_light)
+        token_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.tokens_table = ttk.Treeview(token_frame, columns=("token", "lexema", "tipo", "linea", "columna", "id"),
+                                        show="headings", style="Custom.Treeview")
+        self.tokens_table.heading("token", text="Token")
+        self.tokens_table.heading("lexema", text="Lexema")
+        self.tokens_table.heading("tipo", text="Tipo")
+        self.tokens_table.heading("linea", text="L")
+        self.tokens_table.heading("columna", text="C")
+        self.tokens_table.heading("id", text="ID")
+        self.tokens_table.column("token", width=120, anchor="w")
+        self.tokens_table.column("lexema", width=220, anchor="w")
+        self.tokens_table.column("tipo", width=140, anchor="w")
+        self.tokens_table.column("linea", width=40, anchor="center")
+        self.tokens_table.column("columna", width=40, anchor="center")
+        self.tokens_table.column("id", width=40, anchor="center")
+        self.tokens_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        token_scroll_y = ttk.Scrollbar(token_frame, orient=tk.VERTICAL, command=self.tokens_table.yview)
+        token_scroll_x = ttk.Scrollbar(token_frame, orient=tk.HORIZONTAL, command=self.tokens_table.xview)
+        self.tokens_table.configure(yscrollcommand=token_scroll_y.set, xscrollcommand=token_scroll_x.set)
+        token_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        token_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        symbol_frame = tk.Frame(symbol_tab, bg=self.bg_light)
+        symbol_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.symbols_table = ttk.Treeview(symbol_frame, columns=("token", "lexema", "categoria", "id"),
+                                          show="headings", style="Custom.Treeview")
+        self.symbols_table.heading("token", text="Token")
+        self.symbols_table.heading("lexema", text="Lexema")
+        self.symbols_table.heading("categoria", text="Categoria")
+        self.symbols_table.heading("id", text="ID")
+        self.symbols_table.column("token", width=120, anchor="w")
+        self.symbols_table.column("lexema", width=240, anchor="w")
+        self.symbols_table.column("categoria", width=220, anchor="w")
+        self.symbols_table.column("id", width=40, anchor="center")
+        self.symbols_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        symbol_scroll_y = ttk.Scrollbar(symbol_frame, orient=tk.VERTICAL, command=self.symbols_table.yview)
+        symbol_scroll_x = ttk.Scrollbar(symbol_frame, orient=tk.HORIZONTAL, command=self.symbols_table.xview)
+        self.symbols_table.configure(yscrollcommand=symbol_scroll_y.set, xscrollcommand=symbol_scroll_x.set)
+        symbol_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        symbol_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
         console_panel = tk.Frame(self.root, bg=self.bg_dark, height=250)
         console_panel.pack(side=tk.BOTTOM, fill=tk.BOTH, padx=10, pady=10)
@@ -338,15 +386,54 @@ clase MiClase hereda OtraClase {
         self.root.clipboard_append(contenido)
         messagebox.showinfo("Éxito", "Contenido copiado al portapapeles")
 
+    def actualizar_tablas(self, tokens, simbolos):
+        for item in self.tokens_table.get_children():
+            self.tokens_table.delete(item)
+        for t in tokens:
+            self.tokens_table.insert("", tk.END, values=(
+                t['token'],
+                t['lexema'],
+                t['tipo'],
+                t['linea'],
+                t['columna'],
+                t['id']
+            ))
+
+        for item in self.symbols_table.get_children():
+            self.symbols_table.delete(item)
+        for s in simbolos:
+            self.symbols_table.insert("", tk.END, values=(
+                s['token'],
+                s['lexema'],
+                s['categoria'],
+                s['id']
+            ))
+
     def ejecutar_compilacion(self):
         contenido = self.code_editor.get(1.0, tk.END)
+
         if not contenido.strip():
             self.add_console_log(f"[{self.obtener_hora()}] WARNING No hay código para compilar", "warning")
             return
 
-        self.add_console_log(f"[{self.obtener_hora()}] EXEC Iniciando compilación...", "exec")
-        self.add_console_log(f"[{self.obtener_hora()}] INFO Analizando sintaxis...", "info")
-        self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Compilación finalizada en 150ms.", "success")
+        self.limpiar_consola()
+
+        resultado = analizar_codigo(contenido)
+
+        tokens = resultado["tokens"]
+        errores = resultado["errores"]
+
+        self.actualizar_tablas(tokens, tabla_simbolos)
+
+        self.add_console_log(f"[{self.obtener_hora()}] SUCCESS Análisis léxico completado", "success")
+
+        if errores:
+            for idx, error in enumerate(errores, 1):
+                linea_texto = f"L{error['linea']}, C{error['posicion']}" if error.get('linea') else f"C{error['posicion']}"
+                self.add_console_log(
+                    f"[{self.obtener_hora()}] ERROR #{idx}: {error['categoria']} - '{error['caracter']}' en {linea_texto}: {error['descripcion']}",
+                    "error"
+                )
 
     def obtener_hora(self):
         return datetime.now().strftime("%H:%M:%S")

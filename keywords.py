@@ -6,7 +6,7 @@ PALABRAS_RESERVADAS = {
     "funcion", "retorna", "clase", "hereda", "esto",
     "super", "anonima", "intentar", "excepto", "finalmente",
     "lanzar", "afirmar", "asincrono", "esperar",
-    "importar", "desde", "como",
+    "importar", "desde", "como", "imprimir",
     "y", "o", "no", "es", "no_es",
     "verdadero", "falso", "nulo",
     "global", "local", "coincidir", "caso",
